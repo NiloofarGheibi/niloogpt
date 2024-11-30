@@ -1,57 +1,77 @@
 import os
-import sys
-from typing import Optional, Tuple
-
-import gradio
-from langchain.chains import ConversationChain
-from langchain.llms import OpenAI
-
-import openai
-from langchain.chains import ConversationalRetrievalChain, RetrievalQA
-from langchain_community.chat_models import ChatOpenAI
-from langchain.chains import LLMChain
-from langchain_community.document_loaders import DirectoryLoader, TextLoader
-from langchain_openai import OpenAIEmbeddings
-from langchain.indexes import VectorstoreIndexCreator
-from langchain.indexes.vectorstore import VectorStoreIndexWrapper
-from langchain.memory import VectorStoreRetrieverMemory
-from langchain_community.llms import OpenAI
-from langchain_community.vectorstores import Chroma
-from langchain.prompts.chat import (
-    SystemMessagePromptTemplate,
-    AIMessagePromptTemplate,
-    HumanMessagePromptTemplate,
-    ChatPromptTemplate
-)
-
+from openai import OpenAI
 import constants
 
-def new_chain():
-    llm = ChatOpenAI(temperature=0.7, model_name="gpt-4", n=3)
-    system_template = SystemMessagePromptTemplate.from_template("You are an expert e-commerce, marketplace business and fashion industry. Your main area of expertise and responsibility is to guide Fashion Brands and Merchants to maximize their growth and profit, as well as return rate. You are detail-oriented and can crunch data and bring meaning to them very well. Any instruction and recommendation you give to the merchants and sellers are actionable by them. Don't use cheesy and buzz words, and stick to facts. Keep the answers short and concise, and on point. Avoid using keywords like significant, etc, but meaningful text. In case you could not recommend it, ask the user to reach out to their partner consultants to get guidance. Split the output into 3 sections: summarizing highlights and lowlights along with at least 3 suggestions to make their profit margin bigger.")
-    user_template = HumanMessagePromptTemplate.from_template("{user_prompt}")
-    template = ChatPromptTemplate.from_messages([system_template, user_template])
-    loader = DirectoryLoader("data/")
-    index = VectorstoreIndexCreator(vectorstore_kwargs={"persist_directory":"persist"}).from_loaders([loader])
-    retriever = index.vectorstore.as_retriever(search_kwargs=dict(k=1))
-    memory = VectorStoreRetrieverMemory(retriever=retriever)
-    chain =  LLMChain(llm=llm, prompt=template, verbose=True, memory=memory)
-    return chain
+client = OpenAI(
+        api_key=constants.APIKEY,
+    )
 
-def set_openai_api_key():
-    os.environ["OPENAI_API_KEY"] = constants.APIKEY
-    return new_chain()
+def text_to_json(file):
+    # Create an empty list to store JSON objects
+    json_objects = []
 
-def CustomAssistant(prompt):
-    set_openai_api_key()
-    chain = new_chain()
-    chat_history = []
-    if prompt:
-        text = chain({"user_prompt": prompt})
-        return text['text']
-    return "Type a prompt to get guidance!"
+    completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": constants.INPUT_FORMATTER_PROMPT},
+                {"role": "user", "content": constants.USER_FORMATTER_PROMPT+"\n"+file}
+            ],
+            model="gpt-3.5-turbo",
+            max_tokens=800,  # Adjust as needed
+            temperature=0.1
+    )
+    # Get the response
+    response = completion.choices[0].message.content.strip().replace("\n", "")
+    json_objects.append(response)
+
+    return json_objects
+
+def gen_feedback(inputs,output_file):
+    # Open the output file in append mode
+    with open(output_file, "a") as file:
+        # Loop through the inputs
+        for input_text in inputs:
+            # Create completion request
+            completion = client.chat.completions.create(
+            messages=[
+                    {"role": "system", "content": constants.FEEDBACK_GIVER_PROMT},
+                    {"role": "user", "content": constants.USER_PROMPT+"\n"+input_text}
+            ],
+            model="gpt-3.5-turbo",
+            max_tokens=1500,  # Adjust as needed
+            temperature=0.6
+    )
+
+            # Get the response 
+            response = completion.choices[0].message.content
+
+            # Write the response to the output file
+            file.write(f"Input: {input_text}\n")
+            file.write(f"Response: {response}\n\n")
+            file.write("_________________NEXT_________________\n\n")
 
 
-demo = gradio.Interface(fn=CustomAssistant, inputs = "text", outputs = "text", title = "E-Commerce Assistant")
+            # Print response to console
+            print(f"Input\n: {input_text}")
+            print(f"Response\n: {response}\n")
+            print("_________________NEXT_____________________\n\n")
 
-demo.launch(share=True)
+    print(f"Output written to {output_file}")
+
+def main():
+
+    # Directory containing files
+    directory = './inputs'
+
+    # Iterate through files in the directory
+    for filename in os.listdir(directory):
+        if filename.endswith('.txt'):  # Process only .txt files
+            file_path = os.path.join(directory, filename)
+            with open(file_path, 'r') as file:
+                text = file.read()
+                # Construct object from text
+                inputs = text_to_json(text)
+                gen_feedback(inputs,'output-'+filename)
+
+
+if __name__ == "__main__":
+    main()
